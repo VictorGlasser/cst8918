@@ -80,9 +80,9 @@ resource "azurerm_subnet" "SNet" {
   }*/
 }
 
-# Creates Security Group
-resource "azurerm_application_security_group" "SG" {
-  name                = "${var.labelPrefix}-A05-SG"
+# Creates Application Security Group
+resource "azurerm_application_security_group" "ASG" {
+  name                = "${var.labelPrefix}-A05-ASG"
   location            = azurerm_resource_group.RG.location
   resource_group_name = azurerm_resource_group.RG.name
 
@@ -90,6 +90,60 @@ resource "azurerm_application_security_group" "SG" {
     environment = "Production"
   }
 }
+
+# Creates Network Security Group
+resource "azurerm_network_security_group" "NSG" {
+  name                = "${var.labelPrefix}-A05-NSG"
+  location            = azurerm_resource_group.RG.location
+  resource_group_name = azurerm_resource_group.RG.name
+}
+
+
+# Creates security rule to allow HTTP on port 80
+resource "azurerm_network_security_rule" "Allow_HTTP" {
+  name                        = "${var.labelPrefix}-A05-Allow_HTTP"
+  priority                    = 100
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "80"
+  source_address_prefix       = "*"
+  
+  # Target the ASG
+  destination_application_security_group_ids = [
+    azurerm_application_security_group.ASG.id
+  ]
+
+  resource_group_name         = azurerm_resource_group.RG.name
+  network_security_group_name = azurerm_network_security_group.NSG.name
+}
+
+# Creates security rule to allow HTTP on port 22
+resource "azurerm_network_security_rule" "Allow_SSH" {
+  name                        = "${var.labelPrefix}-A05-Allow_SSH"
+  priority                    = 110
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "22"
+  source_address_prefix       = "*"
+  
+  destination_application_security_group_ids = [
+    azurerm_application_security_group.ASG.id
+  ]
+
+  resource_group_name         = azurerm_resource_group.RG.name
+  network_security_group_name = azurerm_network_security_group.NSG.name
+}
+
+# Associates NSG with subnet
+resource "azurerm_subnet_network_security_group_association" "NSG_Association" {
+  subnet_id                 = azurerm_subnet.SNet.id
+  network_security_group_id = azurerm_network_security_group.NSG.id
+}
+
 
 # Create a network interface card (NIC)
 resource "azurerm_network_interface" "NIC" {
@@ -107,11 +161,17 @@ resource "azurerm_network_interface" "NIC" {
   }
 }
 
+# Attaches ASG to NIC
+resource "azurerm_network_interface_application_security_group_association" "ASG_Association" {
+  network_interface_id          = azurerm_network_interface.NIC.id
+  application_security_group_id = azurerm_application_security_group.ASG.id
+}
+
 # Create a cloud-init configuration for the VM
 data "cloudinit_config" "config" {
   gzip          = false
-  base64_encode = false 
-  part {#!!!!
+  base64_encode = true # Changed since this is what Azure expects 
+  part {
     content_type = "text/cloud-config"
     content      = <<-EOT
       #cloud-config
@@ -130,7 +190,7 @@ resource "azurerm_linux_virtual_machine" "VM" {
   name                = "${var.labelPrefix}-A05-VM"
   resource_group_name = azurerm_resource_group.RG.name
   location            = azurerm_resource_group.RG.location
-  size                = "Standard_B1s"
+  size                = "Standard_B2s" #Changes since Standard_B1s is not allowed on my subscription
   admin_username      = "glas0069"
   network_interface_ids = [
     azurerm_network_interface.NIC.id,
